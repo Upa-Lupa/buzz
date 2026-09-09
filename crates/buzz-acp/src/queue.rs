@@ -32,6 +32,13 @@ use crate::scope::SessionScope;
 /// total admitted backlog.
 const MAX_PENDING_PER_SCOPE: usize = 500;
 
+/// Maximum recently admitted Nostr event IDs retained for relay replay deduplication.
+///
+/// The relay can legitimately replay an event after reconnect or deliver it
+/// through overlapping subscriptions. Keep this independently bounded so a
+/// long-lived harness cannot accumulate unbounded event identity state.
+const MAX_RECENT_EVENT_IDS: usize = 4_096;
+
 /// Aggregate cap on events queued across ALL scopes of a single channel.
 ///
 /// Preserves the pre-thread-scoping backlog protection: moving the per-scope
@@ -198,6 +205,10 @@ pub struct FlushBatch {
 /// ```
 pub struct EventQueue {
     queues: HashMap<SessionScope, VecDeque<QueuedEvent>>,
+    /// Bounded event identity ledger. An event is admitted at most once even
+    /// when the relay delivers the same signed event more than once.
+    recent_event_ids: HashSet<String>,
+    recent_event_id_order: VecDeque<String>,
     in_flight_scopes: HashSet<SessionScope>,
     /// Per-scope deadline for auto-expiring stuck in-flight entries.
     in_flight_deadlines: HashMap<SessionScope, Instant>,
@@ -241,6 +252,8 @@ impl EventQueue {
     pub fn new(dedup_mode: DedupMode) -> Self {
         Self {
             queues: HashMap::new(),
+            recent_event_ids: HashSet::new(),
+            recent_event_id_order: VecDeque::new(),
             in_flight_scopes: HashSet::new(),
             in_flight_deadlines: HashMap::new(),
             in_flight_batch_sizes: HashMap::new(),
@@ -306,6 +319,21 @@ impl EventQueue {
                 "dropping event for in-flight scope (drop mode)"
             );
             return false;
+        }
+        let event_id = event.event.id.to_hex();
+        if !self.recent_event_ids.insert(event_id.clone()) {
+            tracing::debug!(
+                channel_id = %event.channel_id,
+                event_id,
+                "dropping duplicate relay event"
+            );
+            return false;
+        }
+        self.recent_event_id_order.push_back(event_id);
+        if self.recent_event_id_order.len() > MAX_RECENT_EVENT_IDS {
+            if let Some(expired) = self.recent_event_id_order.pop_front() {
+                self.recent_event_ids.remove(&expired);
+            }
         }
         let channel_id = event.channel_id;
         let scope = event.scope.clone();
@@ -2447,6 +2475,21 @@ mod tests {
         // Queue should be empty now.
         assert_eq!(pending_count(&q), 0);
         assert_eq!(q.queues.len(), 0);
+    }
+
+    #[test]
+    fn duplicate_relay_event_is_admitted_once() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let event = make_queued(ch, "hello");
+
+        assert!(q.push(event.clone()));
+        assert!(!q.push(event));
+
+        let batch = q.flush_next().expect("one event should be available");
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(batch.events[0].event.content, "hello");
+        assert!(q.flush_next().is_none());
     }
 
     #[test]

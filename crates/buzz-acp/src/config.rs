@@ -267,6 +267,15 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_MCP_COMMAND", default_value = "")]
     pub mcp_command: String,
 
+    /// Optional comma-separated MCP server commands.
+    /// When present, this supersedes the legacy single `--mcp-command` option.
+    #[arg(long, env = "BUZZ_ACP_MCP_COMMANDS", value_delimiter = ',')]
+    pub mcp_commands: Option<Vec<String>>,
+
+    /// Post the agent's final ACP text back to the originating Buzz conversation.
+    #[arg(long, env = "BUZZ_ACP_POST_AGENT_MESSAGES", default_value_t = false)]
+    pub post_agent_messages: bool,
+
     /// Idle timeout: max seconds of silence before killing a turn.
     /// Resets on any agent stdout activity.
     #[arg(long, env = "BUZZ_ACP_IDLE_TIMEOUT")]
@@ -542,7 +551,10 @@ pub struct Config {
     pub relay_url: String,
     pub agent_command: String,
     pub agent_args: Vec<String>,
-    pub mcp_command: String,
+    /// Resolved MCP server commands, preserving legacy single-command support.
+    pub mcp_commands: Vec<String>,
+    /// Whether final ACP text is posted to the originating Buzz conversation.
+    pub post_agent_messages: bool,
     pub idle_timeout_secs: u64,
     pub max_turn_duration_secs: u64,
     pub agents: u32,
@@ -1150,12 +1162,29 @@ impl Config {
 
         validate_multiple_event_handling(args.multiple_event_handling, args.dedup)?;
 
+        let mcp_commands = args
+            .mcp_commands
+            .map(|commands| {
+                commands
+                    .into_iter()
+                    .map(|command| command.trim().to_string())
+                    .filter(|command| !command.is_empty())
+                    .collect()
+            })
+            .unwrap_or_else(|| {
+                (!args.mcp_command.trim().is_empty())
+                    .then(|| args.mcp_command.trim().to_string())
+                    .into_iter()
+                    .collect()
+            });
+
         let config = Config {
             keys,
             relay_url: args.relay_url,
             agent_command,
             agent_args,
-            mcp_command: args.mcp_command,
+            mcp_commands,
+            post_agent_messages: args.post_agent_messages,
             idle_timeout_secs,
             max_turn_duration_secs,
             agents: args.agents,
@@ -1225,12 +1254,13 @@ impl Config {
             format!(" allowed_respond_to=[{}]", modes.join(","))
         };
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} session_policy={} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}{}",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmds=[{}] post_agent_messages={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} session_policy={} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}{}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
             self.agent_args.join(" "),
-            self.mcp_command,
+            self.mcp_commands.join(","),
+            self.post_agent_messages,
             self.idle_timeout_secs,
             self.max_turn_duration_secs,
             self.agents,
@@ -1539,7 +1569,8 @@ mod tests {
             relay_url: "ws://localhost:3000".into(),
             agent_command: "goose".into(),
             agent_args: vec!["acp".into()],
-            mcp_command: "".into(),
+            mcp_commands: vec![],
+            post_agent_messages: false,
             idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
             max_turn_duration_secs: DEFAULT_MAX_TURN_DURATION_SECS,
             agents: 1,

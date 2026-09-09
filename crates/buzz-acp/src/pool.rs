@@ -359,6 +359,9 @@ pub struct AgentPool {
     /// `Thread` scopes (the sole variant [`hold_decision`](Self::hold_decision)
     /// stamps).
     held_since: HashMap<SessionScope, tokio::time::Instant>,
+    /// Per-scope reset timestamps retained across turns and pool replacement.
+    /// Relay history at or before this boundary is excluded from future prompts.
+    context_reset_pending: HashMap<SessionScope, u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -854,6 +857,7 @@ impl AgentPool {
             session_owners: HashMap::new(),
             next_scope_owner_generation: 1,
             held_since: HashMap::new(),
+            context_reset_pending: HashMap::new(),
         }
     }
 
@@ -1253,6 +1257,24 @@ impl AgentPool {
         self.session_owners.remove(scope);
         self.held_since.remove(scope);
         count
+    }
+
+    /// Reset one scope and retain a history boundary for every subsequent turn.
+    pub fn reset_scope_session(&mut self, scope: &SessionScope, timestamp: u64) -> usize {
+        let invalidated = self.invalidate_scope_session(scope);
+        self.context_reset_pending.insert(scope.clone(), timestamp);
+        invalidated
+    }
+
+    /// Return the retained reset boundary without consuming it.
+    pub fn context_reset_at(&self, scope: &SessionScope) -> Option<u64> {
+        self.context_reset_pending.get(scope).copied()
+    }
+
+    /// Carry conversation boundaries across lazy startup and idle pool replacement.
+    pub fn inherit_context_resets(&mut self, previous: &mut Self) {
+        self.context_reset_pending
+            .extend(previous.context_reset_pending.drain());
     }
 
     /// Whether a channel-only control could name more than one session scope.
@@ -2234,10 +2256,13 @@ fn send_prompt_result(
 ///
 /// The agent is ALWAYS returned — even on panic the `JoinSet` detects the
 /// abort and the caller uses `task_map` to recover the agent index.
+// The reset boundary is per-dispatch state, not shared worker configuration.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_prompt_task(
     mut agent: OwnedAgent,
     batch: Option<FlushBatch>,
     prompt_text: Option<String>,
+    context_reset_at: Option<u64>,
     ctx: Arc<PromptContext>,
     result_tx: mpsc::UnboundedSender<PromptResult>,
     control_rx: Option<tokio::sync::oneshot::Receiver<ControlSignal>>,
@@ -2864,6 +2889,8 @@ pub async fn run_prompt_task(
                     .iter()
                     .any(|event_id| delivered_ids.contains(event_id))
             });
+        let conversation_context =
+            conversation_context_after_reset(conversation_context, context_reset_at);
         let conversation_context =
             conversation_context_delta(conversation_context, &delivered_ids, &rendered_batch_ids);
         pending_delivered_event_ids.extend(rendered_batch_ids);
@@ -3814,6 +3841,39 @@ fn conversation_context_event_ids(context: Option<&ConversationContext>) -> Hash
 /// IDs are compared in Buzz's canonical 64-character lowercase hex form: relay
 /// context JSON supplies the same form emitted by `EventId::to_hex()`. A
 /// non-canonical or missing ID deliberately fails open and may be re-sent.
+fn conversation_context_after_reset(
+    context: Option<ConversationContext>,
+    reset_at: Option<u64>,
+) -> Option<ConversationContext> {
+    let Some(reset_at) = reset_at else {
+        return context;
+    };
+    let mut context = context?;
+    let (messages, total) = match &mut context {
+        ConversationContext::Thread {
+            messages,
+            total,
+            root_present,
+            ..
+        } => {
+            *root_present = false;
+            (messages, total)
+        }
+        ConversationContext::Dm {
+            messages, total, ..
+        } => (messages, total),
+    };
+    // Fail closed for unknown timestamps. Current triggering messages still
+    // arrive in the batch, even if sent in the same second as the reset.
+    messages.retain(|message| {
+        chrono::DateTime::parse_from_rfc3339(&message.timestamp)
+            .ok()
+            .is_some_and(|time| time.timestamp() > reset_at as i64)
+    });
+    *total = messages.len();
+    (!messages.is_empty()).then_some(context)
+}
+
 fn conversation_context_delta(
     context: Option<ConversationContext>,
     delivered: &HashSet<String>,
@@ -5219,6 +5279,54 @@ pub(crate) async fn post_failure_notice(
         Ok(Ok(_)) => {}
         Ok(Err(e)) => tracing::warn!(channel = %channel_id, "failure notice failed: {e}"),
         Err(_) => tracing::warn!(channel = %channel_id, "failure notice timed out"),
+    }
+}
+
+/// Best-effort: post the final ACP text to its source conversation.
+///
+/// This is opt-in because some ACP agents use a message-sending tool themselves.
+/// Thread-scoped conversations reply to the canonical root, while direct
+/// messages and channel-scoped conversations post normally.
+pub(crate) async fn post_agent_message(
+    rest: &crate::relay::RestClient,
+    scope: &SessionScope,
+    content: &str,
+) {
+    let thread_ref = scope.root_event_id().and_then(|root| {
+        let event_id = nostr::EventId::from_hex(root).ok()?;
+        Some(buzz_sdk::ThreadRef {
+            root_event_id: event_id,
+            parent_event_id: event_id,
+        })
+    });
+    let builder = match buzz_sdk::build_message(
+        scope.channel_id(),
+        content,
+        thread_ref.as_ref(),
+        &[],
+        false,
+        &[],
+        &[],
+    ) {
+        Ok(builder) => builder,
+        Err(error) => {
+            tracing::warn!(channel = %scope.channel_id(), "agent response: build failed: {error}");
+            return;
+        }
+    };
+    let event = match builder.sign_with_keys(&rest.keys) {
+        Ok(event) => event,
+        Err(error) => {
+            tracing::warn!(channel = %scope.channel_id(), "agent response: sign failed: {error}");
+            return;
+        }
+    };
+    match tokio::time::timeout(Duration::from_secs(5), rest.submit_event(&event)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => {
+            tracing::warn!(channel = %scope.channel_id(), "agent response failed: {error}")
+        }
+        Err(_) => tracing::warn!(channel = %scope.channel_id(), "agent response timed out"),
     }
 }
 
@@ -6712,6 +6820,7 @@ done"#
                 agent,
                 None,
                 Some(format!("heartbeat-{turn}")),
+                None,
                 Arc::clone(&ctx),
                 result_tx.clone(),
                 None,
@@ -6833,6 +6942,7 @@ done"#
             run_prompt_task(
                 agent,
                 Some(batch),
+                None,
                 None,
                 Arc::clone(&ctx),
                 result_tx.clone(),
@@ -7014,6 +7124,7 @@ done"#
                 agent,
                 Some(batch),
                 None,
+                None,
                 Arc::clone(&ctx),
                 result_tx.clone(),
                 None,
@@ -7176,6 +7287,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         run_prompt_task(
             agent,
             Some(batch),
+            None,
             None,
             Arc::new(ctx),
             result_tx,
@@ -7615,6 +7727,42 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             pool.held_since.contains_key(&tb),
             "thread B hold stamp retained"
         );
+    }
+
+    #[test]
+    fn reset_boundary_survives_lazy_wake_and_multiple_turns() {
+        let channel_id = Uuid::new_v4();
+        let reset_scope = thread_scope(channel_id, &"a".repeat(64));
+        let sibling_scope = thread_scope(channel_id, &"b".repeat(64));
+        let mut pool = AgentPool::from_slots(vec![]);
+
+        assert_eq!(pool.reset_scope_session(&reset_scope, 100), 0);
+        let mut awake = AgentPool::from_slots(vec![]);
+        awake.inherit_context_resets(&mut pool);
+        for _ in 0..3 {
+            assert_eq!(awake.context_reset_at(&reset_scope), Some(100));
+            assert_eq!(awake.context_reset_at(&sibling_scope), None);
+        }
+        let message = |timestamp: i64| ContextMessage {
+            event_id: timestamp.to_string(),
+            pubkey: "user".into(),
+            timestamp: chrono::DateTime::from_timestamp(timestamp, 0)
+                .unwrap()
+                .to_rfc3339(),
+            content: format!("message-{timestamp}"),
+        };
+        let context = ConversationContext::Dm {
+            messages: vec![message(99), message(100), message(101)],
+            total: 3,
+            truncated: false,
+        };
+        let filtered =
+            conversation_context_after_reset(Some(context), awake.context_reset_at(&reset_scope));
+        let Some(ConversationContext::Dm { messages, .. }) = filtered else {
+            panic!("expected DM");
+        };
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "message-101");
     }
 
     /// Insert a `task_map` entry so `agent_index` reads as checked-out (busy)
@@ -9937,6 +10085,7 @@ done"#
         run_prompt_task(
             agent,
             Some(batch),
+            None,
             None,
             Arc::new(ctx),
             result_tx,

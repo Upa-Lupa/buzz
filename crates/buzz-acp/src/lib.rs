@@ -3539,6 +3539,49 @@ async fn tokio_main() -> Result<()> {
                                 tracing::debug!("authorized event matched no rule — dropping");
                                 continue;
                             };
+                            // `/reset` is an authorized user command, not an
+                            // agent prompt. It starts the next turn for this
+                            // exact DM or thread in a fresh ACP session. Unlike
+                            // owner-only operational controls (`!shutdown`,
+                            // `!cancel`, `!rotate`), every user admitted by the
+                            // normal author gate may reset their own permitted
+                            // conversation.
+                            if is_reset_command(&ingress.buzz_event.event, kind_u32) {
+                                let scope = scope::SessionScope::derive(
+                                    config.session_policy,
+                                    ingress.buzz_event.channel_id,
+                                    is_dm_channel(
+                                        ingress.buzz_event.channel_id,
+                                        &ctx.channel_info,
+                                    )
+                                    .await,
+                                    &ingress.buzz_event.event,
+                                );
+                                let invalidated = pool.reset_scope_session(&scope, ingress.buzz_event.event.created_at.as_secs());
+                                let in_flight = signal_in_flight_task_for_scope(
+                                    &mut pool,
+                                    &scope,
+                                    ControlSignal::Rotate,
+                                );
+                                tracing::info!(
+                                    channel_id = %scope.channel_id(),
+                                    scope = %scope.telemetry_label(),
+                                    in_flight,
+                                    invalidated,
+                                    "authorized /reset received — next turn will use a fresh ACP session"
+                                );
+                                let rest = ctx.rest_client.clone();
+                                let reply_scope = scope.clone();
+                                tokio::spawn(async move {
+                                    pool::post_agent_message(
+                                        &rest,
+                                        &reply_scope,
+                                        "대화 컨텍스트를 초기화했습니다. 다음 메시지부터 새 요청으로 처리합니다.",
+                                    )
+                                    .await;
+                                });
+                                continue;
+                            }
                             // Derive the session scope once, at admission, from
                             // the operator policy, DM status, and NIP-10 thread
                             // tags. Under the default `channel` policy this is
@@ -3558,6 +3601,8 @@ async fn tokio_main() -> Result<()> {
                             );
                             tracing::debug!(
                                 channel_id = %session_scope.channel_id(),
+                                event_id = %ingress.buzz_event.event.id,
+                                kind = kind_u32,
                                 scope = %session_scope.telemetry_label(),
                                 thread_scoped = session_scope.is_thread(),
                                 thread_root = session_scope.root_event_id().unwrap_or("-"),
@@ -3655,9 +3700,11 @@ async fn tokio_main() -> Result<()> {
                         // Return to the exact pre-wake lazy state: empty slots,
                         // Listening lifecycle. The top-of-loop wake path re-wakes
                         // on the next accepted event. No second lifecycle.
-                        pool = AgentPool::from_slots(
+                        let mut replacement = AgentPool::from_slots(
                             (0..config.agents).map(|_| None).collect(),
                         );
+                        replacement.inherit_context_resets(&mut pool);
+                        pool = replacement;
                         pool_ready = false;
                         pool_lifecycle = PoolLifecycle::listening();
                         last_activity = tokio::time::Instant::now();
@@ -3992,9 +4039,11 @@ async fn tokio_main() -> Result<()> {
                 }
                 match completion {
                     Ok(()) => {
-                        pool = pool_lifecycle
+                        let mut replacement = pool_lifecycle
                             .take_ready()
                             .expect("successful wake stores a ready pool");
+                        replacement.inherit_context_resets(&mut pool);
+                        pool = replacement;
                         pool_ready = true;
                         emit_runtime_lifecycle(
                             observer.as_ref(),
@@ -4196,6 +4245,14 @@ fn is_owner_control_command(
     kind_u32 == KIND_STREAM_MESSAGE
         && event.content.trim() == command
         && event_mentions_agent(event, agent_pubkey_hex)
+}
+
+/// Whether an admitted stream message asks the harness to reset its ACP session.
+///
+/// Authorization and subscription matching happen before this predicate is
+/// evaluated, so `/reset` is never a bypass around the normal author gate.
+fn is_reset_command(event: &nostr::Event, kind_u32: u32) -> bool {
+    kind_u32 == KIND_STREAM_MESSAGE && event.content.trim().eq_ignore_ascii_case("/reset")
 }
 
 // ── signal_in_flight_task ─────────────────────────────────────────────────────
@@ -4530,6 +4587,8 @@ fn dispatch_pending(
         }
         tracing::debug!(agent = agent.index, channel = %channel_id, scope = %scope.telemetry_label(), affinity_hit, "agent_claimed");
 
+        let context_reset_at = pool.context_reset_at(&scope);
+
         let recoverable_batch = match ctx.dedup_mode {
             DedupMode::Queue => Some(batch.clone()),
             DedupMode::Drop => None,
@@ -4571,6 +4630,7 @@ fn dispatch_pending(
                 agent,
                 Some(batch),
                 None,
+                context_reset_at,
                 ctx_clone,
                 result_tx,
                 Some(control_rx),
@@ -4678,6 +4738,19 @@ fn handle_prompt_result(
     observer: Option<observer::ObserverHandle>,
     rest_client: Option<&relay::RestClient>,
 ) -> LoopAction {
+    let agent_message = result.agent.acp.take_agent_message();
+    if config.post_agent_messages
+        && matches!(result.outcome, PromptOutcome::Ok(_))
+        && !agent_message.trim().is_empty()
+    {
+        if let (PromptSource::Channel(scope), Some(rest)) = (&result.source, rest_client) {
+            let rest = rest.clone();
+            let scope = scope.clone();
+            tokio::spawn(async move {
+                pool::post_agent_message(&rest, &scope, agent_message.trim()).await;
+            });
+        }
+    }
     let before = pool.task_map().len();
     let agent_index = result.agent.index;
     let successful_steer_deliveries = pool
@@ -5242,6 +5315,7 @@ fn dispatch_heartbeat(
             agent,
             None,
             Some(prompt_text),
+            None,
             ctx_clone,
             result_tx,
             None,
@@ -5875,60 +5949,61 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
 }
 
 fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
-    if config.mcp_command.is_empty() {
-        return vec![];
-    }
-    vec![McpServer {
-        name: std::path::Path::new(&config.mcp_command)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("mcp")
-            .to_string(),
-        command: config.mcp_command.clone(),
-        args: vec![],
-        env: {
-            let mut env = vec![
-                EnvVar {
-                    name: "BUZZ_RELAY_URL".into(),
-                    value: config.relay_url.clone(),
-                },
-                EnvVar {
-                    name: "BUZZ_PRIVATE_KEY".into(),
-                    // bech32 encoding of a valid secret key is infallible.
-                    // Panic here is correct: injecting a bogus secret would cause
-                    // delayed, hard-to-diagnose agent failures downstream.
-                    value: config
-                        .keys
-                        .secret_key()
-                        .to_bech32()
-                        .expect("secret key bech32 encoding should never fail"),
-                },
-            ];
-            // Forward BUZZ_AUTH_TAG (NIP-OA owner attestation credential)
-            // so the MCP server can attach it to every signed event.
-            if let Ok(auth_tag) = std::env::var("BUZZ_AUTH_TAG") {
-                if !auth_tag.is_empty() {
-                    env.push(EnvVar {
-                        name: "BUZZ_AUTH_TAG".into(),
-                        value: auth_tag,
-                    });
+    config
+        .mcp_commands
+        .iter()
+        .map(|command| McpServer {
+            name: std::path::Path::new(command)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("mcp")
+                .to_string(),
+            command: command.clone(),
+            args: vec![],
+            env: {
+                let mut env = vec![
+                    EnvVar {
+                        name: "BUZZ_RELAY_URL".into(),
+                        value: config.relay_url.clone(),
+                    },
+                    EnvVar {
+                        name: "BUZZ_PRIVATE_KEY".into(),
+                        // bech32 encoding of a valid secret key is infallible.
+                        // Panic here is correct: injecting a bogus secret would cause
+                        // delayed, hard-to-diagnose agent failures downstream.
+                        value: config
+                            .keys
+                            .secret_key()
+                            .to_bech32()
+                            .expect("secret key bech32 encoding should never fail"),
+                    },
+                ];
+                // Forward BUZZ_AUTH_TAG (NIP-OA owner attestation credential)
+                // so the MCP server can attach it to every signed event.
+                if let Ok(auth_tag) = std::env::var("BUZZ_AUTH_TAG") {
+                    if !auth_tag.is_empty() {
+                        env.push(EnvVar {
+                            name: "BUZZ_AUTH_TAG".into(),
+                            value: auth_tag,
+                        });
+                    }
                 }
-            }
-            // Forward the agent's display name so dev-mcp can use it as the git
-            // author name instead of the raw npub. Read from the process env
-            // rather than Config: this is a pass-through of a contract owned
-            // upstream, and absent simply means dev-mcp falls back to the npub.
-            if let Ok(display_name) = std::env::var("BUZZ_ACP_DISPLAY_NAME") {
-                if !display_name.is_empty() {
-                    env.push(EnvVar {
-                        name: "BUZZ_ACP_DISPLAY_NAME".into(),
-                        value: display_name,
-                    });
+                // Forward the agent's display name so dev-mcp can use it as the git
+                // author name instead of the raw npub. Read from the process env
+                // rather than Config: this is a pass-through of a contract owned
+                // upstream, and absent simply means dev-mcp falls back to the npub.
+                if let Ok(display_name) = std::env::var("BUZZ_ACP_DISPLAY_NAME") {
+                    if !display_name.is_empty() {
+                        env.push(EnvVar {
+                            name: "BUZZ_ACP_DISPLAY_NAME".into(),
+                            value: display_name,
+                        });
+                    }
                 }
-            }
-            env
-        },
-    }]
+                env
+            },
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -6016,6 +6091,18 @@ mod owner_control_command_tests {
             "!rotate",
             &agent
         ));
+    }
+
+    #[test]
+    fn reset_command_requires_an_exact_stream_message() {
+        let reset = make_event(KIND_STREAM_MESSAGE, " /RESET ", None);
+        assert!(is_reset_command(&reset, KIND_STREAM_MESSAGE));
+
+        let with_arguments = make_event(KIND_STREAM_MESSAGE, "/reset please", None);
+        assert!(!is_reset_command(&with_arguments, KIND_STREAM_MESSAGE));
+
+        let wrong_kind = make_event(1, "/reset", None);
+        assert!(!is_reset_command(&wrong_kind, 1));
     }
 
     #[test]
@@ -9141,7 +9228,8 @@ mod build_mcp_servers_tests {
             relay_url: "ws://localhost:3000".into(),
             agent_command: "goose".into(),
             agent_args: vec!["acp".into()],
-            mcp_command: "test-mcp-server".into(),
+            mcp_commands: vec!["test-mcp-server".into()],
+            post_agent_messages: false,
             idle_timeout_secs: config::DEFAULT_IDLE_TIMEOUT_SECS,
             max_turn_duration_secs: config::DEFAULT_MAX_TURN_DURATION_SECS,
             agents: 1,
@@ -9291,7 +9379,7 @@ mod build_mcp_servers_tests {
     #[test]
     fn empty_mcp_command_returns_no_servers() {
         let mut config = test_config();
-        config.mcp_command = "".into();
+        config.mcp_commands = vec![];
         let servers = build_mcp_servers(&config);
         assert!(
             servers.is_empty(),
@@ -9302,17 +9390,29 @@ mod build_mcp_servers_tests {
     #[test]
     fn absolute_path_mcp_command_uses_file_stem_as_name() {
         let mut config = test_config();
-        config.mcp_command = "/opt/bin/my-mcp-server".into();
+        config.mcp_commands = vec!["/opt/bin/my-mcp-server".into()];
         let servers = build_mcp_servers(&config);
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].name, "my-mcp-server");
     }
 
     #[test]
+    fn multiple_mcp_commands_expose_each_server() {
+        let mut config = test_config();
+        config.mcp_commands = vec!["/opt/bin/buzz-dev-mcp".into(), "/opt/bin/erp-mcp".into()];
+
+        let servers = build_mcp_servers(&config);
+
+        assert_eq!(servers.len(), 2);
+        assert_eq!(servers[0].name, "buzz-dev-mcp");
+        assert_eq!(servers[1].name, "erp-mcp");
+    }
+
+    #[test]
     fn mcp_command_with_no_stem_falls_back_to_mcp() {
         // Path::new("").file_stem() returns None — exercises the unwrap_or("mcp") path.
         let mut config = test_config();
-        config.mcp_command = "".into();
+        config.mcp_commands = vec![];
         // Empty command returns no servers; test the stem logic directly.
         assert_eq!(
             std::path::Path::new("")
@@ -9323,7 +9423,7 @@ mod build_mcp_servers_tests {
         );
 
         // Confirm a non-empty command with no stem (e.g. just a dot) also falls back.
-        config.mcp_command = ".".into();
+        config.mcp_commands = vec![".".into()];
         let servers = build_mcp_servers(&config);
         assert_eq!(servers.len(), 1);
         assert_eq!(
@@ -9367,7 +9467,8 @@ mod error_outcome_emission_tests {
             // feed emission under test.
             agent_command: "true".into(),
             agent_args: vec![],
-            mcp_command: "test-mcp-server".into(),
+            mcp_commands: vec!["test-mcp-server".into()],
+            post_agent_messages: false,
             idle_timeout_secs: config::DEFAULT_IDLE_TIMEOUT_SECS,
             max_turn_duration_secs: config::DEFAULT_MAX_TURN_DURATION_SECS,
             agents: 1,

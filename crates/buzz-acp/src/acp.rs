@@ -22,6 +22,12 @@ use crate::usage::{
 /// Lines exceeding this limit are rejected to prevent OOM from rogue agents.
 const MAX_LINE_SIZE: usize = 10_000_000; // 10 MB
 
+/// Bound retained agent text from one turn when relay posting is enabled.
+///
+/// ACP message chunks are untrusted process output, so retaining an unbounded
+/// copy could let a noisy provider exhaust harness memory.
+const MAX_AGENT_MESSAGE_BYTES: usize = 64 * 1024;
+
 /// An MCP server configuration passed to `session/new`.
 ///
 /// Corresponds to the `McpServerStdio` variant in the ACP schema.
@@ -150,6 +156,9 @@ pub struct AcpClient {
     /// Monotonically increasing JSON-RPC request id counter.
     /// Harness-generated IDs are always numeric.
     next_id: u64,
+    /// Text streamed by the agent for the current prompt.
+    /// Cleared before every prompt and consumed by the relay-posting path.
+    agent_message: String,
     /// The id of a `session/request_permission` request that has been received
     /// but not yet responded to. Stored as `serde_json::Value` because JSON-RPC 2.0
     /// permits both numeric and string IDs from the agent.
@@ -550,6 +559,7 @@ impl AcpClient {
             stdin,
             reader: FramedRead::new(stdout, LinesCodec::new_with_max_length(MAX_LINE_SIZE)),
             next_id: 0,
+            agent_message: String::new(),
             pending_permission_id: None,
             permission_responded: false,
             last_prompt_id: None,
@@ -781,6 +791,7 @@ impl AcpClient {
         idle_timeout: std::time::Duration,
         max_duration: std::time::Duration,
     ) -> Result<StopReason, AcpError> {
+        self.agent_message.clear();
         let params = build_prompt_params(session_id, prompt_blocks);
         let hard_deadline = tokio::time::Instant::now() + max_duration;
         self.current_hard_deadline = Some(hard_deadline);
@@ -836,6 +847,11 @@ impl AcpClient {
             }
         }
         self.parse_prompt_response(session_id, &result?)
+    }
+
+    /// Take the bounded text streamed during the most recent prompt.
+    pub fn take_agent_message(&mut self) -> String {
+        std::mem::take(&mut self.agent_message)
     }
 
     /// Send a `session/cancel` **notification** (no `id` field, no response expected).
@@ -1756,6 +1772,15 @@ impl AcpClient {
             "agent_message_chunk" => {
                 if let Some(text) = update["content"]["text"].as_str() {
                     tracing::info!(target: "acp::stream", "{text}");
+                    let available =
+                        MAX_AGENT_MESSAGE_BYTES.saturating_sub(self.agent_message.len());
+                    if available > 0 {
+                        let mut end = text.len().min(available);
+                        while end > 0 && !text.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        self.agent_message.push_str(&text[..end]);
+                    }
                 }
                 false
             }

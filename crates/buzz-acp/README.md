@@ -111,6 +111,8 @@ All configuration is via environment variables (or CLI flags — every env var h
 | `BUZZ_ACP_AGENT_COMMAND` | no | `goose` | Agent binary to spawn. |
 | `BUZZ_ACP_AGENT_ARGS` | no | `acp` | Agent arguments (comma-separated). |
 | `BUZZ_ACP_MCP_COMMAND` | no | `""` (empty) | Path to an optional MCP server binary to provide to the agent subprocess. |
+| `BUZZ_ACP_MCP_COMMANDS` | no | — | Comma-separated MCP server binaries. When set, it replaces `BUZZ_ACP_MCP_COMMAND`. |
+| `BUZZ_ACP_POST_AGENT_MESSAGES` | no | `false` | Post final ACP text back to the source Buzz conversation. Enable only when the agent does not already send messages through a tool. |
 | `BUZZ_ACP_IDLE_TIMEOUT` | no | `620` | Idle timeout: max seconds of silence before cancelling a turn. Resets on any agent stdout activity. |
 | `BUZZ_ACP_MAX_TURN_DURATION` | no | `7200` | Absolute wall-clock cap per turn (safety valve). |
 | `BUZZ_API_TOKEN` | no | — | API token (required if relay enforces token auth). |
@@ -172,6 +174,19 @@ Owner control commands must be kind:9 stream messages from the owner, must have 
 buzz messages send --channel <channel-id> --reply-to <thread-root-id> \
   --mention <agent-pubkey> --content '!cancel'
 ```
+
+`/reset` is a separate user-facing command.
+An event admitted by the normal author gate with an exact `/reset` body is consumed by the harness, which cancels any in-flight turn for that DM or thread and invalidates its ACP session.
+The harness posts a confirmation, and the next request starts a fresh ACP session.
+The reset timestamp is retained across subsequent turns, lazy startup, and idle pool replacement, so older relay conversation history is not reintroduced on the second turn.
+Messages at or before the reset timestamp are excluded from fetched history; new triggering messages are still delivered even in the same timestamp second.
+The boundary is process-local and does not delete Buzz messages or reset persistent core memory.
+Normal channel membership and author authorization checks still apply.
+
+For a messaging assistant, pair `BUZZ_ACP_SUBSCRIBE=all` with `BUZZ_ACP_KINDS=9` to receive messages from every joined channel without treating typing indicators, presence, or reactions as prompts.
+Without a kinds filter, `all` intentionally subscribes to every event kind.
+Set the assistant persona through `BUZZ_ACP_SYSTEM_PROMPT` (or its file option).
+The harness supplies `session/new.systemPrompt`, which takes precedence over the `BUZZ_AGENT_SYSTEM_PROMPT` fallback in `buzz-agent`.
 
 > **Note:** The default mode is `owner-only`. Agents without a registered `agent_owner_pubkey` will not respond to any events until the owner is resolved. Set `--respond-to anyone` to disable the gate entirely.
 
