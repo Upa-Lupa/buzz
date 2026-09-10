@@ -827,7 +827,7 @@ checksum = "5d20789868f4b01b2f2caec9f5c4e0213b41e3e5702a50157d699ae31ced2fcb"
 
 [[package]]
 name = "buzz-acp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -860,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-admin"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "buzz-audit",
@@ -887,7 +887,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-agent"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -915,7 +915,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-audit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "buzz-core",
  "buzz-datastore-tracing",
@@ -935,7 +935,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-auth"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "buzz-core",
@@ -958,7 +958,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-backend-kubernetes"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "hex",
@@ -978,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -1009,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-conformance"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proptest",
  "serde",
@@ -1020,7 +1020,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1041,7 +1041,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-datastore-tracing"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "metrics",
  "metrics-util",
@@ -1058,7 +1058,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-db"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "buzz-core",
  "buzz-datastore-tracing",
@@ -1080,7 +1080,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-deletion"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "buzz-core",
@@ -1102,7 +1102,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-dev-mcp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "buzz-cli",
@@ -1131,7 +1131,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-media"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "blurhash",
@@ -1162,7 +1162,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-pair-relay"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures-util",
  "http-body-util",
@@ -1179,7 +1179,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-pairing-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "buzz-core",
  "clap",
@@ -1196,7 +1196,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-persona"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1207,7 +1207,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-pubsub"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "buzz-auth",
  "buzz-core",
@@ -1226,7 +1226,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-push-gateway"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "appattest",
@@ -1331,7 +1331,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-relay-mesh"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "deadpool-redis",
@@ -1354,7 +1354,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-sdk"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "buzz-core",
  "nostr 0.44.7",
@@ -1366,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-search"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "buzz-core",
  "buzz-datastore-tracing",
@@ -1380,7 +1380,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-test-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1411,7 +1411,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-voice"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "atomic-write-file",
  "hex",
@@ -1430,7 +1430,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-workflow"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "buzz-core",
  "buzz-db",
@@ -1454,7 +1454,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-ws-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures-util",
  "nostr 0.44.7",
@@ -1900,7 +1900,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "countdown-bot"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "buzz-sdk",
@@ -3221,7 +3221,7 @@ dependencies = [
 
 [[package]]
 name = "git-credential-nostr"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "nostr 0.44.7",
@@ -3231,7 +3231,7 @@ dependencies = [
 
 [[package]]
 name = "git-sign-nostr"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3886,7 +3886,7 @@ dependencies = [
 
 [[package]]
 name = "ifc-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proptest",
 ]
