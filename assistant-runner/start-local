@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+runner_dir="$(cd "$(dirname "$0")" && pwd)"
+buzz_dir="$(cd "$runner_dir/.." && pwd)"
+set -a
+source "$buzz_dir/.env.sheens-assistant.local"
+set +a
+# Keep the existing ERP MCP configuration and access-control settings intact.
+if [[ -z "${BUZZ_ACP_MCP_COMMANDS:-}" ]]; then
+  echo 'Set the existing ERP MCP wrapper in BUZZ_ACP_MCP_COMMANDS first.' >&2
+  exit 1
+fi
+export BUZZ_ACP_MCP_COMMANDS="${BUZZ_ACP_MCP_COMMANDS},$runner_dir/documents"
+unset BUZZ_ACP_SYSTEM_PROMPT
+export BUZZ_ACP_SYSTEM_PROMPT_FILE="$runner_dir/.runtime/system-prompt.md"
+export BUZZ_ACP_AGENT_COMMAND="$buzz_dir/target/debug/buzz-agent"
+"$runner_dir/.venv/bin/python" "$runner_dir/deploy_skills.py" \
+  --erp "$buzz_dir/../sheens-erp-2" --runtime "$runner_dir/.runtime"
+cd "$runner_dir/.runtime"
+exec "$buzz_dir/target/debug/buzz-acp"

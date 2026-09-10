@@ -1758,6 +1758,19 @@ fn mcp_servers_with_git_origin(
     agent_name: Option<&str>,
 ) -> Vec<McpServer> {
     let mut servers = servers.to_vec();
+    // Scope attachment readers to the authenticated session, never to a
+    // model-supplied channel. Remove stale overrides even for unscoped sessions.
+    for server in &mut servers {
+        server
+            .env
+            .retain(|entry| entry.name != "BUZZ_CONTEXT_CHANNEL_ID");
+        if let Some(channel_id) = channel_id {
+            server.env.push(EnvVar {
+                name: "BUZZ_CONTEXT_CHANNEL_ID".into(),
+                value: channel_id.to_string(),
+            });
+        }
+    }
     let origin = match (channel_id, channel_type) {
         (Some(channel_id), Some("stream")) => Some(EnvVar {
             name: "BUZZ_GIT_ORIGIN_CHANNEL_ID".into(),
@@ -5527,6 +5540,30 @@ mod tests {
             .env
             .iter()
             .any(|entry| entry.name == "BUZZ_GIT_ORIGIN_AGENT_NAME"));
+    }
+
+    #[test]
+    fn attachment_scope_overrides_stale_config_and_fails_closed_without_channel() {
+        let channel_id = Uuid::new_v4();
+        let mut server = test_mcp_server();
+        server.env.push(EnvVar {
+            name: "BUZZ_CONTEXT_CHANNEL_ID".into(),
+            value: "stale-other-dm".into(),
+        });
+        let scoped =
+            mcp_servers_with_git_origin(&[server.clone()], Some(channel_id), Some("dm"), None);
+        let values: Vec<_> = scoped[0]
+            .env
+            .iter()
+            .filter(|entry| entry.name == "BUZZ_CONTEXT_CHANNEL_ID")
+            .map(|entry| entry.value.as_str())
+            .collect();
+        assert_eq!(values, vec![channel_id.to_string()]);
+        let unscoped = mcp_servers_with_git_origin(&[server], None, None, None);
+        assert!(!unscoped[0]
+            .env
+            .iter()
+            .any(|entry| entry.name == "BUZZ_CONTEXT_CHANNEL_ID"));
     }
 
     #[test]

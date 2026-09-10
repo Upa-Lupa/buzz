@@ -1,0 +1,9 @@
+mcp==1.30.0
+pypdfium2==4.30.0
+python-docx==1.2.0
+openpyxl==3.1.5
+xlrd==2.0.2
+Pillow==12.3.0
+coincurve==21.0.0
+httpx==0.28.1
+bech32==1.2.0
