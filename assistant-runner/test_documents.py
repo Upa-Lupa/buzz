@@ -142,8 +142,16 @@ class DocumentsTest(unittest.TestCase):
             manifest = deploy(root / "erp", root / "runtime")
             deployed = root / "runtime/.agents/skills/order-registration/SKILL.md"
             self.assertEqual(deployed.read_bytes(), content)
-            self.assertIn(
-                content.decode(), (root / "runtime/system-prompt.md").read_text()
+            prompt = (root / "runtime/system-prompt.md").read_text()
+            self.assertIn(content.decode(), prompt)
+            self.assertIn("user_facing_response_contract", prompt)
+            self.assertIn("빠진 필수 항목", prompt)
+            self.assertIn("comma-separated", prompt)
+            self.assertIn("only allowed headings", prompt)
+            self.assertNotIn("확인한 정보\n- <field name>", prompt)
+            self.assertGreater(
+                prompt.index("user_facing_response_contract"),
+                prompt.index("deployed_shared_skill"),
             )
             self.assertEqual(
                 manifest["order-registration"]["sha256"],

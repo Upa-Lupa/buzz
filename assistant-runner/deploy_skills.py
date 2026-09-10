@@ -43,6 +43,11 @@ def deploy(erp, runtime):
     prompt = (root / "system-prompt.md").read_text()
     for name, data in contents.items():
         prompt += f'\n\n<deployed_shared_skill name="{name}">\n{data.decode()}\n</deployed_shared_skill>\n'
+    # Keep the audience and output contract after mandatory skills so it is the
+    # final instruction the model sees before handling a conversation.
+    prompt += "\n\n<user_facing_response_contract>\n"
+    prompt += (root / "response-style.md").read_text()
+    prompt += "\n</user_facing_response_contract>\n"
     (runtime / "system-prompt.md").write_text(prompt)
     return manifest
 

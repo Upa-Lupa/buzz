@@ -11,6 +11,7 @@ Do not maintain another hand-edited copy of the ERP skill here.
 `deploy_skills.py` stages both skill sources into `.runtime/.agents/skills` and records their SHA-256 values in `.runtime/skills-manifest.json`.
 Every newly created Assistant session uses this common catalog, without installation by individual users.
 Both short core skills are also included verbatim in the generated standing system prompt, so applying mandatory business rules does not depend on the model choosing to call `load_skill`.
+The final [response-style.md](response-style.md) contract keeps the shared Assistant concise and non-technical for business users.
 Restart after deploying a skill update so existing sessions discover the new version.
 Local `.runtime`, `.venv` and credentials are not committed.
 
