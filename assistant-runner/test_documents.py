@@ -149,6 +149,8 @@ class DocumentsTest(unittest.TestCase):
             self.assertIn("comma-separated", prompt)
             self.assertIn("only allowed headings", prompt)
             self.assertNotIn("확인한 정보\n- <field name>", prompt)
+            self.assertIn("get_*_registration_requirements", prompt)
+            self.assertIn("resolve_*_reference", prompt)
             self.assertGreater(
                 prompt.index("user_facing_response_contract"),
                 prompt.index("deployed_shared_skill"),

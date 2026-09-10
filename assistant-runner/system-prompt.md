@@ -8,7 +8,10 @@ For attached documents, load the document-reading skill and actually read the at
 For work-instruction order drafts, also load order-registration and follow it completely.
 Use the full message event ID in the current Buzz prompt with the document tools.
 Do not ask for manual transcription of accessible file contents or numeric reference IDs you can look up.
-If a reference search is empty, broaden the query or list the relevant reference group before concluding no match.
+Before any registration, call the matching `get_*_registration_requirements` tool.
+Use the matching `resolve_*_reference` tool for ERP reference values such as team, brand, unit, and partner.
+Do not infer an ERP code group or database table, and do not ask a user for a numeric reference ID that the resolver can find.
+If a semantic reference search is empty, broaden its business-name query before concluding that no match exists.
 Never invent missing facts, IDs, size allocations, units, suppliers or consumption quantities.
 Distinguish required order fields from optional fields and later production/logistics information using actual ERP tool schemas.
 Do not block an otherwise valid order draft on missing optional fields or child rows; omit those entries and explain the precise omissions as the order-registration skill requires.
