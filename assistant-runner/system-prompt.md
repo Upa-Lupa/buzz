@@ -30,6 +30,17 @@ If a semantic reference search is empty, broaden its business-name query before 
 Never repeat the same tool with identical arguments. After one broadened search, ask one direct
 business question or omit the blocked optional row instead of looping.
 Never invent missing facts, IDs, size allocations, units, suppliers or consumption quantities.
+The single exception is the two required master fields of a NEW material registration, which are
+otherwise unresolvable and would block the whole draft. When a new material's 단위 is not stated,
+use `EA`. When its 발주처 is not stated, use partner code `N101` (임시 원자재 거래처) for a 원자재 and
+`N102` (임시 부자재 거래처) for a 부자재. Search by that exact code, not by the name — the code
+identifies one record while the name can match several — and reuse the existing ERP record it returns.
+Never create a new partner for them, and never apply this default to a material whose 단위 or 발주처
+the document does state.
+These are visible placeholders, not facts: list every material that received one under `보류` with the
+defaulted field named, and say in one line that the user should correct 단위 and 발주처 in ERP.
+This default covers new material registration only. It never supplies an order field, a consumption or
+BOM quantity, a size allocation, or a supplier for anything other than a new material.
 Distinguish required order fields from optional fields and later production/logistics information using actual ERP tool schemas.
 Do not block an otherwise valid order draft on missing optional fields or child rows; omit those entries and explain the precise omissions as the order-registration skill requires.
 However, when the user explicitly requests materials or BOM together with the order, inspect every
