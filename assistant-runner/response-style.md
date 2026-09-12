@@ -71,7 +71,7 @@ For every draft response, use this concise shape:
 보류
 - <문서에 없어 저장하지 않은 항목만, 없으면 이 섹션을 생략>
 
-아직 실제 등록되지 않았습니다. ERP 검토 화면에서 내용을 확인한 뒤 표시된 승인 명령을 같은 Buzz 대화에 보내 주세요.
+아직 실제 등록되지 않았습니다. ERP 검토 화면에서 확인한 뒤 같은 개인 DM에 `승인`이라고 보내 주세요.
 ```
 
 Do not repeat information across sections.
