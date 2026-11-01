@@ -15,14 +15,15 @@ from unittest.mock import patch
 import httpx
 from bech32 import bech32_encode, convertbits
 from coincurve import PrivateKey
-from deploy_skills import deploy
-from document_parser import checked_zip, parse
-from documents_mcp import parse_isolated
 from docx import Document
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from openpyxl import Workbook
 from PIL import Image
+
+from deploy_skills import deploy
+from document_parser import checked_zip, parse
+from documents_mcp import parse_isolated
 from relay_documents import (
     RelayDocuments,
     encoded,
@@ -150,7 +151,7 @@ class DocumentsTest(unittest.TestCase):
             self.assertIn("only allowed headings", prompt)
             self.assertNotIn("확인한 정보\n- <field name>", prompt)
             self.assertIn("get_*_registration_requirements", prompt)
-            self.assertIn("resolve_*_reference", prompt)
+            self.assertIn("resolve_registration_references", prompt)
             self.assertGreater(
                 prompt.index("user_facing_response_contract"),
                 prompt.index("deployed_shared_skill"),

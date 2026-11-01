@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 
 from bech32 import bech32_encode, convertbits
+
 from relay_documents import parse_secret
 
 

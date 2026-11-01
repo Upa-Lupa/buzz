@@ -10,6 +10,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent
+
 from relay_documents import RelayDocuments
 
 mcp = FastMCP("sheens-documents")
